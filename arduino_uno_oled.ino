@@ -55,9 +55,12 @@ void draw_progress_bar(){
   display.drawRect(0,8*2+4,128,32, WHITE);   
 }
 void fill_progress_bar(){
-  int time_passed = (millis() - task_start_time);
-  float ptp = time_passed / float(cycle_time);
-  display.fillRect(0,8*2+4,128*ptp,32, WHITE);
+  unsigned long time_passed = (millis() - task_start_time);
+  int bar_length = (128*time_passed) / cycle_time;
+  if(bar_length > 128){
+    bar_length = 128;
+  }
+  display.fillRect(0,8*2+4,bar_length,32, WHITE);
 }
 void update_progress_bar(){
   fill_progress_bar();
