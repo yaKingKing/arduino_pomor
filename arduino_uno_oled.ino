@@ -51,6 +51,7 @@ void draw_head(){
   display.print(String(current_cycle+1));
   display.println("/4");
 }
+int last_progress_bar_length = 0;
 void draw_progress_bar(){
   display.drawRect(0,8*2+4,128,32, WHITE);   
 }
@@ -60,7 +61,10 @@ void fill_progress_bar(){
   if(bar_length > 128){
     bar_length = 128;
   }
-  display.fillRect(0,8*2+4,bar_length,32, WHITE);
+  if( bar_length != last_progress_bar_length){
+    display.fillRect(last_progress_bar_length,8*2+4,bar_length,32, WHITE);
+    last_progress_bar_length = bar_length;
+  }
 }
 void update_progress_bar(){
   fill_progress_bar();
@@ -83,7 +87,7 @@ void draw_remaining_time(){
   }
  }
 void update_remaining_time(){
-  display.fillRect(0,64-(8),128,8, BLACK);
+  display.fillRect(128-(6*5),64-(8),128,8, BLACK);
   draw_remaining_time();
   display.display();
 }
