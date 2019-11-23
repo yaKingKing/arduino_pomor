@@ -62,7 +62,7 @@ void fill_progress_bar(){
     bar_length = 128;
   }
   if( bar_length != last_progress_bar_length){
-    display.fillRect(last_progress_bar_length,8*2+4,bar_length,32, WHITE);
+    display.fillRect(last_progress_bar_length,8*2+4,bar_length-last_progress_bar_length,32, WHITE);
     last_progress_bar_length = bar_length;
   }
 }
