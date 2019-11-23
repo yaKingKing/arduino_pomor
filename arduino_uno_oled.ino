@@ -4,6 +4,8 @@
 #include "pomor_display.h"
 #include <Adafruit_GFX.h>
 
+#define DEBUG 1
+
 // arduino setup variabes
 const int buttonPin = 2; // must be interrupt pin
 const int buzzerPin = 5; // must be pwm pin
@@ -25,7 +27,9 @@ void setup(){
   pinMode(buzzerPin, OUTPUT);
   pinMode(buttonPin, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(buttonPin), on_button_pressed, FALLING);
-
+  #ifdef DEBUG
+  Serial.begin(115200);
+  #endif
   // initialize with the I2C with addr 0x3C
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 }
@@ -41,6 +45,9 @@ void on_button_pressed(){
 
 
 void loop() {
+  #ifdef DEBUG
+  Serial.println(get_task_name(current_task)+"  "+String(current_pomor_cycle)+"/4");
+  #endif
   button_pressed = false;
   draw_display(get_task_name(current_task), current_pomor_cycle);
   wait_and_fill_progress_bar();
@@ -54,6 +61,9 @@ void wait_and_fill_progress_bar(){
   long ttw = 1; // time-to-wait
   int task_time = get_task_time(current_task);
   unsigned long task_end_time = current_task_start_time + task_time;
+  #ifdef DEBUG
+  Serial.println("wait_and_fill_progress_bar(); // wait "+String(task_time));
+  #endif
   while( (not button_pressed) and (millis() < task_end_time) ){
     unsigned long remaining_time = max((task_end_time - millis()), 0);
     update_display(task_time-remaining_time,task_time);
@@ -63,9 +73,13 @@ void wait_and_fill_progress_bar(){
   if (not button_pressed){
     update_display(1,1);
   }
+  #ifdef DEBUG
+  if (button_pressed){
+    Serial.println("\- button pressed");
   }else{
-    display.print("00:00");
+    Serial.println("\- time exceeded");
   }
+  #endif
 }
 
 
