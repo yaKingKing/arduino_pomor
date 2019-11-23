@@ -5,7 +5,7 @@
 #include <Adafruit_SSD1306.h>
 
 // arduino setup variabes
-const int buttonPin = 2;
+const int buttonPin = 2; // must be interrupt pin
 const int buzzerPin = 5; // must be pwm pin
 const int display_update_ms = 1000;
 
@@ -24,7 +24,8 @@ Adafruit_SSD1306 display(OLED_RESET);
 
 void setup(){
   pinMode(buzzerPin, OUTPUT);
-  pinMode(buttonPin, INPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(buttonPin), on_button_pressed, FALLING);
 
   // initialize with the I2C with addr 0x3C
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -38,6 +39,7 @@ task current_task = work;
 unsigned long cycle_time = 0;
 String task_name = "";
 unsigned long task_start_time = 0;
+boolean button_pressed = false;
 
 
 void draw_head(){
@@ -101,18 +103,20 @@ void draw_display(){
   display.display();
 }
 
+void on_button_pressed(){
+  button_pressed = true;
+  Serial.println("button pressed "+String(millis()));
+}
 
 boolean wait_with_interrupt(unsigned long ms){
   // wait for ms milli seconds or until button is pressed
   // return true if button is pressed, otherwise false
-  bool button_pressed = false;
+  button_pressed = false;
   bool time_exceeded = false;
   unsigned long internal_start_time = millis();
   while (not button_pressed and not time_exceeded) {
-    button_pressed = (digitalRead(buttonPin) == LOW);
     time_exceeded = (millis()-internal_start_time) >= ms;
   }
-  return button_pressed;
 }
 
 
@@ -127,7 +131,7 @@ bool wait_and_update(){
     }
     update_progress_bar();
     update_remaining_time();
-    bool button_pressed = wait_with_interrupt(ttw);
+    wait_with_interrupt(ttw);
     if(button_pressed){
       return true;
     }
@@ -139,7 +143,6 @@ bool wait_and_update(){
 }
 
 void wait_for_button(){
-  bool button_pressed = false;
   int buzzer_times[] = {100,100,500,500};
   int buzzer_times_lenght = 4;
   int volumes[] = {1,1,1,1,10,10,20,20,50,50,255};
@@ -150,7 +153,7 @@ void wait_for_button(){
     for(int i=0; i< buzzer_times_lenght; i++){
       state = (state==0)?1:0;
       analogWrite(buzzerPin, volumes[volume_idx]*state);
-      button_pressed = wait_with_interrupt(buzzer_times[i]);
+      wait_with_interrupt(buzzer_times[i]);
       if(button_pressed){
         digitalWrite(buzzerPin, LOW);
         return;
