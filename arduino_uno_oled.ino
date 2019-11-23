@@ -6,7 +6,7 @@
 
 // arduino setup variabes
 const int buttonPin = 2;
-const int buzzerPin = 4;
+const int buzzerPin = 5; // must be pwm pin
 const int display_update_ms = 1000;
 
 // buzzer options
@@ -141,15 +141,23 @@ bool wait_and_update(){
 void wait_for_button(){
   bool button_pressed = false;
   int buzzer_times[] = {100,100,500,500};
-  int buzzer_lines_lenght = 4;
+  int buzzer_times_lenght = 4;
+  int volumes[] = {1,1,1,1,10,10,20,20,50,50,255};
+  int volumes_lenth = 11;
+  int volume_idx = 0;
+  int state = 0;
   while (true){
-    for(int i=0; i< buzzer_lines_lenght; i++){
-      digitalWrite(buzzerPin, !digitalRead(buzzerPin));
+    for(int i=0; i< buzzer_times_lenght; i++){
+      state = (state==0)?1:0;
+      analogWrite(buzzerPin, volumes[volume_idx]*state);
       button_pressed = wait_with_interrupt(buzzer_times[i]);
       if(button_pressed){
         digitalWrite(buzzerPin, LOW);
         return;
       }
+    }
+    if( volume_idx < volumes_lenth-1 ){
+      volume_idx += 1;
     }
   }
 }
