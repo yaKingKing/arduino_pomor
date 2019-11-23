@@ -59,7 +59,7 @@ void loop() {
 
 void wait_and_fill_progress_bar(){
   long ttw = 1; // time-to-wait
-  int task_time = get_task_time(current_task);
+  unsigned long task_time = get_task_time(current_task);
   unsigned long task_end_time = current_task_start_time + task_time;
   #ifdef DEBUG
   Serial.println("wait_and_fill_progress_bar(); // wait "+String(task_time));
