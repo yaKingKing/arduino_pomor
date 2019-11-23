@@ -1,8 +1,8 @@
 #include <SPI.h>
 #include <Wire.h>
-#include "pomor.h"
+#include "pomor_task.h"
+#include "pomor_display.h"
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 
 // arduino setup variabes
 const int buttonPin = 2; // must be interrupt pin
@@ -13,14 +13,13 @@ const int display_update_ms = 1000;
 const unsigned int buzzer_gentle_ms = 3*1000;
 const unsigned int buzzer_medium_ms = 3*1000;
 
-// pomor setup variables
-const unsigned long work_time_ms = 20L*60L*1000L;
-const unsigned long pause_time_ms = 5L*60L*1000L;
-const unsigned long long_pause_time_ms = 20L*60L*1000L;
 
+// non-constant variables
+task current_task = work;
+unsigned long current_task_start_time = 0;
+int current_pomor_cycle = 0;
+boolean button_pressed = false;
 
-#define OLED_RESET -1 //  Reset pin # (or -1 if sharing Arduino reset pin)
-Adafruit_SSD1306 display(OLED_RESET);
 
 void setup(){
   pinMode(buzzerPin, OUTPUT);
@@ -31,181 +30,88 @@ void setup(){
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 }
 
-
-int current_cycle = 0;
-
-// set by set_current_task()
-task current_task = work;
-unsigned long cycle_time = 0;
-String task_name = "";
-unsigned long task_start_time = 0;
-boolean button_pressed = false;
-
-
-void draw_head(){
-  // print current task name
-  display.setTextColor(WHITE);
-  display.setTextSize(2);
-  display.setCursor(0,0);
-  display.println(task_name);
-  // print current cycle
-  display.setCursor(128-(6*2*3),0);
-  display.print(String(current_cycle+1));
-  display.println("/4");
-}
-int last_progress_bar_length = 0;
-void draw_progress_bar(){
-  display.drawRect(0,8*2+4,128,32, WHITE);   
-}
-void fill_progress_bar(){
-  unsigned long time_passed = (millis() - task_start_time);
-  int bar_length = (128*time_passed) / cycle_time;
-  if(bar_length > 128){
-    bar_length = 128;
-  }
-  if( bar_length != last_progress_bar_length){
-    display.fillRect(last_progress_bar_length,8*2+4,bar_length-last_progress_bar_length,32, WHITE);
-    last_progress_bar_length = bar_length;
+unsigned long last_time_pressed = 0;
+void on_button_pressed(){
+  // wait for button to rise at leas 500 ms
+  if(millis()>=(last_time_pressed+300)){
+    last_time_pressed=millis();
+    button_pressed = true;
   }
 }
-void update_progress_bar(){
-  fill_progress_bar();
-  display.display();
+
+
+void loop() {
+  button_pressed = false;
+  draw_display(get_task_name(current_task), current_pomor_cycle);
+  wait_and_fill_progress_bar();
+  alert_user();
+  set_next_task();
 }
-void draw_remaining_time(){
-  display.setTextColor(WHITE);
-  display.setTextSize(1);
-  display.setCursor(128-(6*5),64-(8));
-  unsigned long time_passed = (millis() - task_start_time);
-  long ms_left = cycle_time - time_passed;
-  if(ms_left > 0){
-    unsigned long seconds_left = (ms_left/(1000))%60;
-    unsigned long minutest_left = (ms_left/1000)/60;
-    String minutes_string = ((minutest_left < 10) ? "0": "" ) + String(minutest_left);
-    String seconds_string = ((seconds_left < 10) ? "0": "") + String(seconds_left);
-    display.print(minutes_string+":"+seconds_string);
+
+
+
+void wait_and_fill_progress_bar(){
+  long ttw = 1; // time-to-wait
+  int task_time = get_task_time(current_task);
+  unsigned long task_end_time = current_task_start_time + task_time;
+  while( (not button_pressed) and (millis() < task_end_time) ){
+    unsigned long remaining_time = max((task_end_time - millis()), 0);
+    update_display(task_time-remaining_time,task_time);
+    ttw = min(remaining_time, display_update_ms);
+    wait_with_interrupt(ttw);
+  }
+  if (not button_pressed){
+    update_display(1,1);
+  }
   }else{
     display.print("00:00");
   }
- }
-void update_remaining_time(){
-  display.fillRect(128-(6*5),64-(8),128,8, BLACK);
-  draw_remaining_time();
-  display.display();
-}
-
-void draw_display(){
-  display.clearDisplay();
-  draw_head();
-  draw_progress_bar();
-  fill_progress_bar();
-  draw_remaining_time();
-  display.display();
-}
-
-void on_button_pressed(){
-  button_pressed = true;
-  Serial.println("button pressed "+String(millis()));
-}
-
-boolean wait_with_interrupt(unsigned long ms){
-  // wait for ms milli seconds or until button is pressed
-  // return true if button is pressed, otherwise false
-  button_pressed = false;
-  bool time_exceeded = false;
-  unsigned long internal_start_time = millis();
-  while (not button_pressed and not time_exceeded) {
-    time_exceeded = (millis()-internal_start_time) >= ms;
-  }
 }
 
 
-
-bool wait_and_update(){
-  unsigned long time_passed = (millis() - task_start_time);
-  long rest_time = cycle_time - time_passed;
-  while(rest_time > 0){
-    long ttw = (rest_time < display_update_ms) ? rest_time : display_update_ms;
-    if(ttw < 0){
-      continue;
-    }
-    update_progress_bar();
-    update_remaining_time();
-    wait_with_interrupt(ttw);
-    if(button_pressed){
-      return true;
-    }
-    time_passed = (millis() - task_start_time);
-    rest_time = cycle_time - time_passed;
-  }
-  update_progress_bar();
-  return false;
+void set_next_task(){
+  current_task_start_time = millis();
+  task next_task = get_next_task(current_task, current_pomor_cycle);
+  int next_pomor_cycle = get_next_cycle(current_task, current_pomor_cycle);
+  current_task = next_task;
+  current_pomor_cycle = next_pomor_cycle;
 }
 
-void wait_for_button(){
+
+void alert_user(){
   int buzzer_times[] = {100,100,500,500};
   int buzzer_times_lenght = 4;
   int volumes[] = {1,1,1,1,10,10,20,20,50,50,255};
   int volumes_lenth = 11;
-  int volume_idx = 0;
   int state = 0;
-  while (true){
-    for(int i=0; i< buzzer_times_lenght; i++){
-      state = (state==0)?1:0;
-      analogWrite(buzzerPin, volumes[volume_idx]*state);
-      wait_with_interrupt(buzzer_times[i]);
-      if(button_pressed){
-        digitalWrite(buzzerPin, LOW);
-        return;
+  while (not button_pressed){
+    // increase volume
+    for(int volume_idx=0; true; volume_idx=min(volume_idx+1,volumes_lenth-1)){
+      // iterate throug buzzer_times to get specific sound
+      for(int buzzer_times_idx=0; buzzer_times_idx< buzzer_times_lenght; buzzer_times_idx++){
+        state = (state==0)?1:0;
+        analogWrite(buzzerPin, volumes[volume_idx]*state);
+        wait_with_interrupt(buzzer_times[buzzer_times_idx]);
+        if(button_pressed){
+          digitalWrite(buzzerPin, LOW);
+          return;
+        }
       }
     }
-    if( volume_idx < volumes_lenth-1 ){
-      volume_idx += 1;
-    }
   }
 }
 
-void set_current_task(task t){
-  current_task = t;
-  task_start_time = millis();
-  switch(t){
-    case pause: 
-      cycle_time = pause_time_ms;
-      task_name = "break";
-      break;
-    case work: 
-      cycle_time = work_time_ms;
-      task_name = "work";
-      break;
-    case long_pause: 
-      cycle_time = long_pause_time_ms;
-      task_name = "BREAK";
-      break;
+
+
+void wait_with_interrupt(unsigned long ms){
+  // wait for ms milli seconds or until button is pressed
+  // return true if button is pressed, otherwise false
+  if (button_pressed){
+    return;
   }
-  draw_display();
-}
-
-void loop() {
-
-  bool skip = false;
-  for(current_cycle=0; current_cycle<4; current_cycle++){
-    set_current_task(work);
-    skip = wait_and_update();
-    if(not skip){
-      wait_for_button();
-    }else{
-      skip = false;
-    }
-    if(current_cycle != 3){
-      set_current_task(pause);
-    }else{
-      set_current_task(long_pause);
-    }
-    skip = wait_and_update();
-    if(not skip){
-      wait_for_button();
-    }else{
-      skip = false;
-    }
+  unsigned long internal_start_time = millis();
+  bool time_exceeded = false;
+  while (not button_pressed and not time_exceeded) {
+    time_exceeded = (millis()-internal_start_time) >= ms;
   }
 }
