@@ -33,8 +33,7 @@ int get_next_cycle(task t, int cycle){
   }
 }
 
-
-task get_task_time(task t){
+unsigned long get_task_time(task t){
   switch(t){
     case work: return 20L*60L*1000L;
     case pause: return  5L*60L*1000L;
