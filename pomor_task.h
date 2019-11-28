@@ -34,9 +34,17 @@ int get_next_cycle(task t, int cycle){
 }
 
 unsigned long get_task_time(task t){
+  #ifdef DEBUG
+  switch(t){
+    case work: return 20L*1000L;
+    case pause: return  5L*1000L;
+    case long_pause: return 20L*1000L;
+  }
+  #else
   switch(t){
     case work: return 20L*60L*1000L;
     case pause: return  5L*60L*1000L;
     case long_pause: return 20L*60L*1000L;
   }
+  #endif
 }

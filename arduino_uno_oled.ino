@@ -1,10 +1,14 @@
-#include <SPI.h>
+#define DEBUG 1
+#undef DEBUG
+
 #include <Wire.h>
 #include "pomor_task.h"
 #include "pomor_display.h"
 #include <Adafruit_GFX.h>
+#ifdef DEBUG
+#include <SPI.h>
+#endif
 
-#define DEBUG 1
 
 // arduino setup variabes
 const int buttonPin = 2; // must be interrupt pin
@@ -14,8 +18,11 @@ const int display_update_ms = 1000;
 // buzzer options
 const unsigned int buzzer_gentle_ms = 3*1000;
 const unsigned int buzzer_medium_ms = 3*1000;
-
-
+#ifdef DEBUG
+const unsigned long max_buzzing_time = 3*1000;
+#else
+const unsigned long max_buzzing_time = 30*1000;
+#endif
 // non-constant variables
 task current_task = work;
 unsigned long current_task_start_time = 0;
@@ -62,7 +69,7 @@ void wait_and_fill_progress_bar(){
   unsigned long task_time = get_task_time(current_task);
   unsigned long task_end_time = current_task_start_time + task_time;
   #ifdef DEBUG
-  Serial.println("wait_and_fill_progress_bar(); // wait "+String(task_time));
+  Serial.println("wait_and_fill_progress_bar(); // task_time="+String(task_time));
   #endif
   while( (not button_pressed) and (millis() < task_end_time) ){
     unsigned long remaining_time = max((task_end_time - millis()), 0);
@@ -96,22 +103,38 @@ void alert_user(){
   int buzzer_times[] = {100,100,500,500};
   int buzzer_times_lenght = 4;
   int volumes[] = {1,1,1,1,10,10,20,20,50,50,255};
+  int volume_idx = 0;
   int volumes_lenth = 11;
   int state = 0;
-  while (not button_pressed){
-    // increase volume
-    for(int volume_idx=0; true; volume_idx=min(volume_idx+1,volumes_lenth-1)){
-      // iterate throug buzzer_times to get specific sound
-      for(int buzzer_times_idx=0; buzzer_times_idx< buzzer_times_lenght; buzzer_times_idx++){
-        state = (state==0)?1:0;
-        analogWrite(buzzerPin, volumes[volume_idx]*state);
-        wait_with_interrupt(buzzer_times[buzzer_times_idx]);
-        if(button_pressed){
-          digitalWrite(buzzerPin, LOW);
-          return;
-        }
+  unsigned long start_time = millis();
+  while (millis()-start_time <= max_buzzing_time){
+    // iterate throug buzzer_times to get specific sound
+    for(int buzzer_times_idx=0; buzzer_times_idx< buzzer_times_lenght; buzzer_times_idx++){
+      state = (state==0)?1:0;
+      analogWrite(buzzerPin, volumes[volume_idx]*state);
+      wait_with_interrupt(buzzer_times[buzzer_times_idx]);
+      if(button_pressed){
+        digitalWrite(buzzerPin, LOW);
+        return;
       }
     }
+    // increase volume
+    volume_idx = min(volume_idx+1,volumes_lenth-1);
+  }
+  #ifdef DEBUG
+  Serial.println("buzzing time exceeded");
+  #endif
+  // waited to long, go to sleep mode
+  digitalWrite(buzzerPin, LOW);
+  while (not button_pressed){
+    #ifdef DEBUG
+    wait_with_interrupt(1000*5);
+    #else
+    wait_with_interrupt(1000*60*5);
+    #endif
+    digitalWrite(buzzerPin, HIGH);
+    wait_with_interrupt(100);
+    digitalWrite(buzzerPin, LOW);
   }
 }
 
