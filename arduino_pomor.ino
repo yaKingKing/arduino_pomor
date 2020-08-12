@@ -1,5 +1,6 @@
 //#define DEBUG
 #include "notes.h"
+#include <avr/sleep.h> 
 
 
 // Button variables
@@ -88,10 +89,7 @@ void loop() {
   #endif
   
   if (event == 1){
-    if(pause){
-      endPause();
-      showCurrentTaskProgress();
-    }else if(notify){
+    if(notify){
       stopNotifying();
       startNextTask();
     } else {
@@ -113,6 +111,37 @@ void loop() {
   if (notify && !pause){
     notify_update();
   }
+  // calculate how long one can seep
+
+  // if pause -> forever
+  if(pause){
+    sleep();
+    endPause();
+    showCurrentTaskProgress();
+  }
+  
+  // if currently running a task -> until task end
+  // if notifying -> until next notify step
+  // if showing current cycle -> until leds of
+}
+
+void sleep(){
+  Serial.println("sleep");
+  delay(500);
+  attachInterrupt(digitalPinToInterrupt(buttonPin),wakeUp,LOW);
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  sleep_mode();
+  sleep_disable();
+  Serial.println("woke up");
+}
+
+void sleep(int milli_seconds){
+
+}
+
+void wakeUp(){
+  detachInterrupt(digitalPinToInterrupt(buttonPin));
 }
 
 
