@@ -29,8 +29,11 @@ unsigned long turnOfLedsAtTime = 0;
 
 
 // pomor variables
-//const unsigned long task_times[] = {20L*1000L,5L*1000L,20L*1000L,5L*1000L,20L*1000L,5L*1000L,20L*1000L,20L*1000L};
+# ifdef DEBUG
+const unsigned long task_times[] = {20L*1000L,5L*1000L,20L*1000L,5L*1000L,20L*1000L,5L*1000L,20L*1000L,20L*1000L};
+# else
 const unsigned long task_times[] = {25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,20L*60L*1000L};
+# endif
 int current_task = 0;
 unsigned long task_start_time = millis();
 
