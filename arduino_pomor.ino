@@ -3,12 +3,20 @@
 #include <avr/sleep.h> 
 
 
+// pomor variables
+const unsigned long task_times[] = {25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,20L*60L*1000L};
+int current_task = 0;
+unsigned long task_start_time = millis();
+const int showCurrentTaskProgressLedTime = 1000;   // ms led show: how long do the leds shine when showing the current progress of a task
+boolean currentlyShowingTaskProgress = false;
+boolean currentlyShowingCurrentTask = false;
+
 // Button variables
 const int buttonPin = 2;
-const int debounce = 20;          // ms debounce period to prevent flickering when pressing or releasing the button
-const int DCgap = 500;            // max ms between clicks for a double click event
-const int holdTime = 1000;        // ms hold period: how long to wait for press+hold event
-const int longHoldTime = 3000;    // ms long hold period: how long to wait for press+hold event
+const int debounce = 20;                           // ms debounce period to prevent flickering when pressing or releasing the button
+const int DCgap = 200;  // max ms between clicks for a double click event
+const int holdTime = 1000;                         // ms hold period: how long to wait for press+hold event
+const int longHoldTime = 3000;                     // ms long hold period: how long to wait for press+hold event
 boolean buttonVal = HIGH;   // value read from button
 boolean buttonLast = HIGH;  // buffered value of the button's previous state
 boolean DCwaiting = false;  // whether we're waiting for a double click (down)
@@ -28,14 +36,6 @@ const int greenLedPin = 4;
 unsigned long turnOfLedsAtTime = 0;
 
 
-// pomor variables
-# ifdef DEBUG
-const unsigned long task_times[] = {20L*1000L,5L*1000L,20L*1000L,5L*1000L,20L*1000L,5L*1000L,20L*1000L,20L*1000L};
-# else
-const unsigned long task_times[] = {25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,20L*60L*1000L};
-# endif
-int current_task = 0;
-unsigned long task_start_time = millis();
 
 // buzzer variables
 const int buzzerPin = 8;
@@ -85,22 +85,29 @@ void loop() {
   int event = checkButton();
   
   #ifdef DEBUG
-  if (event == 1) Serial.println("click");
-  if (event == 2) Serial.println("double click");
-  if (event == 3) Serial.println("hold");
-  if (event == 4) Serial.println("long hold");
+  if (event == 1) Serial.println("e: click");
+  if (event == 2) Serial.println("e: double click"); // not required any more
+  if (event == 3) Serial.println("e: hold");
+  if (event == 4) Serial.println("e: long hold");
   #endif
   
-  if (event == 1){
+  if (event == 1){   
     if(notify){
       stopNotifying();
       startNextTask();
     } else {
-      showCurrentTaskProgress();
+      if(currentlyShowingTaskProgress || currentlyShowingCurrentTask){
+        // we show the current task progress and another click is registered
+        // then start netxt task.
+        currentlyShowingTaskProgress = false;
+        currentlyShowingCurrentTask = true;
+        startNextTask();
+      }else{
+        currentlyShowingTaskProgress = true;
+        currentlyShowingCurrentTask = false;
+        showCurrentTaskProgress();
+      }
     }
-  }
-  if (event == 2 && !pause && !notify){
-    startNextTask();
   }
   if (event == 3 && !pause && !notify){
     startPause();
@@ -162,7 +169,7 @@ void showCurrentTaskProgress(){
     // pause
     digitalWrite(greenLedPin, LOW);
   }
-  turnOfLedsAtTime = millis() + 1000;
+  turnOfLedsAtTime = millis() + showCurrentTaskProgressLedTime;
 }
 void showCurrentTask(){
   turnOfLeds();
@@ -180,6 +187,9 @@ void showCurrentTask(){
 
 // skip task
 void startNextTask(){
+  #ifdef DEBUG
+  Serial.println("start next task");
+  #endif
   current_task = (current_task+1) % 8;
   showCurrentTask();
 }
@@ -254,6 +264,8 @@ void turnOfLedsUpdate(){
   // if other functionallity wants to turn off leds after a given time
   if (turnOfLedsAtTime != 0){
     if (millis() > turnOfLedsAtTime){
+      currentlyShowingTaskProgress = false;
+      currentlyShowingCurrentTask = false;
       turnOfLeds();
       turnOfLedsAtTime = 0;
     }
