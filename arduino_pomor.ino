@@ -31,7 +31,7 @@ boolean longHoldEventPast = false;// whether or not the long hold event happened
 
 // Led variables
 const int led_array_pins[] = {14,15,16,17};
-const int redLedPin = 18;
+const int redLedPin = 5;
 const int greenLedPin = 4;
 unsigned long turnOfLedsAtTime = 0;
 
