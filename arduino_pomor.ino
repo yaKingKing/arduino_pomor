@@ -1,33 +1,35 @@
 //#define DEBUG
+//#define DEBUG_SHORT_POMOR_TIMES
 #include "notes.h"
-#include <avr/sleep.h> 
+#include <avr/sleep.h>
+#include <RTClib.h>
+
+
+// RTC Variables
+RTC_DS3231 rtc;
+#define CLOCK_INTERRUPT_PIN 3
+boolean timerTimedOut = false;
+
+// button variables
+const int buttonPin = 2;
+unsigned long pressedAt = 0;
+unsigned long buttonDownCnt = 0;
+boolean buttonPressed = false;
+boolean buttonHold = false;
 
 
 // pomor variables
+#ifdef DEBUG_SHORT_POMOR_TIMES
+const unsigned long task_times[] = {25L*1000L,5L*1000L,25L*1000L,5L*1000L,25L*1000L,5L*1000L,25L*1000L,20L*1000L};
+#else
 const unsigned long task_times[] = {25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,20L*60L*1000L};
+#endif
 int current_task = 0;
-unsigned long task_start_time = millis();
+DateTime taskStartTime; // time the current task was started 
 const int showCurrentTaskProgressLedTime = 1000;   // ms led show: how long do the leds shine when showing the current progress of a task
 boolean currentlyShowingTaskProgress = false;
 boolean currentlyShowingCurrentTask = false;
 
-// Button variables
-const int buttonPin = 2;
-const int debounce = 20;                           // ms debounce period to prevent flickering when pressing or releasing the button
-const int DCgap = 200;  // max ms between clicks for a double click event
-const int holdTime = 1000;                         // ms hold period: how long to wait for press+hold event
-const int longHoldTime = 3000;                     // ms long hold period: how long to wait for press+hold event
-boolean buttonVal = HIGH;   // value read from button
-boolean buttonLast = HIGH;  // buffered value of the button's previous state
-boolean DCwaiting = false;  // whether we're waiting for a double click (down)
-boolean DConUp = false;     // whether to register a double click on next release, or whether to wait and click
-boolean singleOK = true;    // whether it's OK to do a single click
-long downTime = -1;         // time the button was pressed down
-long upTime = -1;           // time the button was released
-boolean ignoreUp = false;   // whether to ignore the button release because the click+hold was triggered
-boolean waitForUp = false;        // when held, whether to wait for the up event
-boolean holdEventPast = false;    // whether or not the hold event happened already
-boolean longHoldEventPast = false;// whether or not the long hold event happened already
 
 // Led variables
 const int led_array_pins[] = {14,15,16,17};
@@ -53,6 +55,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("start");
   #endif
+  
   pinMode(buttonPin, INPUT);
   pinMode(redLedPin, OUTPUT);
   pinMode(greenLedPin, OUTPUT);
@@ -65,6 +68,43 @@ void setup() {
   digitalWrite(redLedPin, HIGH);
   digitalWrite(greenLedPin, HIGH);
   iterateAllLeds(); // show some startup animation
+  initRTC();
+  attachInterrupt(digitalPinToInterrupt(buttonPin),buttonPressedISR,FALLING);
+  setTimerForCurrentTask();
+}
+
+void initRTC(){
+    // initializing the rtc
+    if(!rtc.begin()) {
+        Serial.println("Couldn't find RTC!");
+        Serial.flush();
+        abort();
+    }
+    
+    if(rtc.lostPower()) {
+        // this will adjust to the date and time at compilation
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
+    
+    //we don't need the 32K Pin, so disable it
+    rtc.disable32K();
+    
+    // Making it so, that the alarm will trigger an interrupt
+    pinMode(CLOCK_INTERRUPT_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(CLOCK_INTERRUPT_PIN), timerTimeoutISR, FALLING);
+    
+    // set alarm 1, 2 flag to false (so alarm 1, 2 didn't happen so far)
+    // if not done, this easily leads to problems, as both register aren't reset on reboot/recompile
+    rtc.clearAlarm(1);
+    rtc.clearAlarm(2);
+    
+    // stop oscillating signals at SQW Pin
+    // otherwise setAlarm1 will fail
+    rtc.writeSqwPinMode(DS3231_OFF);
+    
+    // turn off alarm 2 (in case it isn't off already)
+    // again, this isn't done at reboot, so a previously set alarm could easily go overlooked
+    rtc.disableAlarm(2);
 }
 
 void iterateAllLeds(){
@@ -82,82 +122,138 @@ void iterateAllLeds(){
 }
 
 void loop() {
-  int event = checkButton();
-  
-  #ifdef DEBUG
-  if (event == 1) Serial.println("e: click");
-  if (event == 2) Serial.println("e: double click"); // not required any more
-  if (event == 3) Serial.println("e: hold");
-  if (event == 4) Serial.println("e: long hold");
-  #endif
-  
-  if (event == 1){   
+
+
+  if(buttonPressed){
+    buttonPressed = false;
     if(notify){
+      #ifdef DEBUG
+      Serial.println("-> stop Notifying, start next task");
+      #endif
       stopNotifying();
       startNextTask();
-    } else {
-      if(currentlyShowingTaskProgress || currentlyShowingCurrentTask){
-        // we show the current task progress and another click is registered
-        // then start netxt task.
-        currentlyShowingTaskProgress = false;
-        currentlyShowingCurrentTask = true;
-        startNextTask();
-      }else{
-        currentlyShowingTaskProgress = true;
-        currentlyShowingCurrentTask = false;
-        showCurrentTaskProgress();
-      }
+      showCurrentTask();
+    } else if (!currentlyShowingTaskProgress && !currentlyShowingCurrentTask ){
+      #ifdef DEBUG
+      Serial.println("-> show current task progress");
+      #endif
+      showCurrentTaskProgress();
+    }else  if ( currentlyShowingTaskProgress || currentlyShowingCurrentTask ){
+      #ifdef DEBUG
+      Serial.println("-> skip current task");
+      #endif
+      startNextTask();
+      showCurrentTask();
     }
   }
-  if (event == 3 && !pause && !notify){
-    startPause();
+
+  if(buttonHold){
+    buttonHold = false;
+    #ifdef DEBUG
+    Serial.println("-> start pause");
+    #endif
+    showPause();
+    pauseUntilInterrupt();
+    turnOfLeds();
   }
+
+
+  // update shit
   
-  turnOfLedsUpdate();
-  bool taskTimeOver = (millis()-task_start_time) >= task_times[current_task];
-  if (taskTimeOver && !notify && !pause){
+  if (rtc.alarmFired(1)){
+    #ifdef DEBUG
+    Serial.println("-> notify end of task");
+    #endif
+    rtc.clearAlarm(1);
     startNotify();
   }
-  if (notify && !pause){
-    notify_update();
-  }
-  // calculate how long one can seep
 
-  // if pause -> forever
-  if(pause){
+  if (notify){
+    notify_update();
+  }else  if (currentlyShowingTaskProgress || currentlyShowingCurrentTask){
+    ledUpdate();
+  }else  if (!notify && !currentlyShowingTaskProgress && !currentlyShowingCurrentTask){
+    #ifdef DEBUG
+    Serial.println("/- sleep");
+    #endif
     sleep();
-    endPause();
-    showCurrentTaskProgress();
+    #ifdef DEBUG
+    if(buttonPressed) Serial.println("\\- woke up (button)");
+    else if(timerTimedOut) Serial.println("\\- woke up (timer)");
+    #endif
   }
   
-  // if currently running a task -> until task end
-  // if notifying -> until next notify step
-  // if showing current cycle -> until leds of
+
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+void ledUpdate(){
+  if (turnOfLedsAtTime <= millis()){
+      currentlyShowingTaskProgress = false;
+      currentlyShowingCurrentTask = false;
+      turnOfLeds();
+    }
 }
 
 void sleep(){
-  Serial.println("sleep");
-  delay(500);
-  attachInterrupt(digitalPinToInterrupt(buttonPin),wakeUp,LOW);
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-  sleep_enable();
-  sleep_mode();
-  sleep_disable();
-  Serial.println("woke up");
+  #ifdef DEBUG
+  // delay for last serial println to finish
+  delay(20);
+  #endif
+  
+  // sleep until either the button is pressed or the timer is timed out
+  while (!buttonPressed && !timerTimedOut && !buttonHold){
+    set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+    sleep_enable();
+    sleep_mode();
+    sleep_disable();
+    #ifdef DEBUG
+    Serial.println("|- interrupt");
+    #endif
+  }
 }
 
-void sleep(int milli_seconds){
 
+void setTimerForCurrentTask(){
+  setTimerIn(TimeSpan(task_times[current_task]/1000L));
 }
-
-void wakeUp(){
-  detachInterrupt(digitalPinToInterrupt(buttonPin));
+void setTimerIn(TimeSpan timerTime){
+   #ifdef DEBUG
+  Serial.println("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
+  #endif
+  rtc.clearAlarm(1);
+  taskStartTime = rtc.now();
+  timerTimedOut = false;
+  if(!rtc.setAlarm1(
+          taskStartTime + timerTime,
+          DS3231_A1_Hour
+  )) {
+     #ifdef DEBUG
+      Serial.println("Error, alarm wasn't set!");
+      #endif
+  }
 }
 
 
 // show task
 void showCurrentTaskProgress(){
-  int n_leds = min(((millis()-task_start_time)*5)/task_times[current_task],4);
+  TimeSpan passedTime = rtc.now() - taskStartTime;
+  int n_leds = min( ( (passedTime.totalseconds()*5)  /   (task_times[current_task]/1000) )  ,4);
+  #ifdef DEBUG
+  Serial.println("   passedTime: "+String(passedTime.minutes())+" min, "+String(passedTime.seconds())+" sec ("+String(n_leds)+" leds)");
+  #endif
   turnOfLeds();
   for (int i = 0; i<n_leds; i++){
     digitalWrite(led_array_pins[i], LOW);
@@ -170,6 +266,8 @@ void showCurrentTaskProgress(){
     digitalWrite(greenLedPin, LOW);
   }
   turnOfLedsAtTime = millis() + showCurrentTaskProgressLedTime;
+  currentlyShowingTaskProgress = true;
+  currentlyShowingCurrentTask = false;
 }
 void showCurrentTask(){
   turnOfLeds();
@@ -182,16 +280,24 @@ void showCurrentTask(){
     digitalWrite(greenLedPin, LOW);
   }
   turnOfLedsAtTime = millis() + 3000;
-  task_start_time = millis();
+  currentlyShowingTaskProgress = false;
+  currentlyShowingCurrentTask = true;
 }
+void showPause(){
+  currentlyShowingTaskProgress = false;
+  currentlyShowingCurrentTask = false;
+  turnOfLeds();
+  digitalWrite(greenLedPin, LOW);
+  digitalWrite(redLedPin, LOW);
+  digitalWrite(led_array_pins[current_task/2], LOW);
+}
+
+
 
 // skip task
 void startNextTask(){
-  #ifdef DEBUG
-  Serial.println("start next task");
-  #endif
   current_task = (current_task+1) % 8;
-  showCurrentTask();
+  setTimerForCurrentTask();
 }
 
 // notify
@@ -206,20 +312,17 @@ void stopNotifying(){
   pulseI = 0;
   pulseLoops = 0;
 }
-// pause
-void startPause(){
-  turnOfLeds();
-  pause = true;
-  pauseAt = millis();
-  digitalWrite(greenLedPin, LOW);
-  digitalWrite(redLedPin, LOW);
-  digitalWrite(led_array_pins[current_task/2], LOW);
-}
-void endPause(){
-  pause = false;
-  task_start_time += (millis()-pauseAt);
-}
 
+
+// pause
+void pauseUntilInterrupt(){
+  rtc.clearAlarm(1);
+  // time that we already did the task
+  TimeSpan processedTime =  rtc.now() - taskStartTime;
+  TimeSpan taskTime = TimeSpan((task_times[current_task]/1000L));
+  sleep();
+  setTimerIn( taskTime - processedTime );
+}
 
 
 
@@ -243,7 +346,7 @@ void notify_update(){
   if (pulseLoops > 35){
      stopNotifying();
      startNextTask();
-     startPause();
+     pauseUntilInterrupt();
      return;
   }
   bool pulseAmplitude = pulseI%2;
@@ -259,6 +362,55 @@ void notify_update(){
     }
   }
 }
+
+
+
+
+
+void buttonPressedISR(){
+  if( (millis()-pressedAt) <= 80){
+     #ifdef DEBUG
+    Serial.println("-- B: To close button clicks! "+String((millis()-pressedAt)));
+    #endif
+  }else{
+    //digitalWrite(greenLedPin, LOW);
+    buttonDownCnt = 0;
+    while( (digitalRead(buttonPin) == LOW) && (buttonDownCnt < 200000) ){
+      buttonDownCnt++;
+    }
+    if(buttonDownCnt >= 200000){
+      buttonHold = true;
+      buttonPressed = false;
+      pressedAt = millis();
+      #ifdef DEBUG
+      Serial.println("-- B: hold for "+String(buttonDownCnt));
+      #endif
+    }else if(buttonDownCnt >= 500){
+      buttonHold = false;
+      buttonPressed = true;
+      pressedAt = millis();
+      #ifdef DEBUG
+      Serial.println("-- B: click for "+String(buttonDownCnt));
+      #endif
+    }else{
+      #ifdef DEBUG
+      Serial.println("-- B: To Short Button Down: "+String(buttonDownCnt));
+      #endif
+    }
+  }
+}
+
+void timerTimeoutISR(){
+  //detachInterrupt(digitalPinToInterrupt(buttonPin));
+  #ifdef DEBUG
+  Serial.println("-- Timer Timeout --");
+  #endif
+  timerTimedOut = true;
+}
+
+
+
+
 
 void turnOfLedsUpdate(){
   // if other functionallity wants to turn off leds after a given time
@@ -288,69 +440,4 @@ void writeAllLeds(bool state){
   }
   digitalWrite(redLedPin, state);
   digitalWrite(greenLedPin, state);
-}
-
-int checkButton() {    
-   int event = 0;
-   buttonVal = digitalRead(buttonPin);
-   // Button pressed down
-   if (buttonVal == LOW && buttonLast == HIGH && (millis() - upTime) > debounce)
-   {
-       downTime = millis();
-       ignoreUp = false;
-       waitForUp = false;
-       singleOK = true;
-       holdEventPast = false;
-       longHoldEventPast = false;
-       if ((millis()-upTime) < DCgap && DConUp == false && DCwaiting == true)  DConUp = true;
-       else  DConUp = false;
-       DCwaiting = false;
-   }
-   // Button released
-   else if (buttonVal == HIGH && buttonLast == LOW && (millis() - downTime) > debounce)
-   {        
-       if (not ignoreUp)
-       {
-           upTime = millis();
-           if (DConUp == false) DCwaiting = true;
-           else
-           {
-               event = 2;
-               DConUp = false;
-               DCwaiting = false;
-               singleOK = false;
-           }
-       }
-   }
-   // Test for normal click event: DCgap expired
-   if ( buttonVal == HIGH && (millis()-upTime) >= DCgap && DCwaiting == true && DConUp == false && singleOK == true && event != 2)
-   {
-       event = 1;
-       DCwaiting = false;
-   }
-   // Test for hold
-   if (buttonVal == LOW && (millis() - downTime) >= holdTime) {
-       // Trigger "normal" hold
-       if (not holdEventPast)
-       {
-           event = 3;
-           waitForUp = true;
-           ignoreUp = true;
-           DConUp = false;
-           DCwaiting = false;
-           //downTime = millis();
-           holdEventPast = true;
-       }
-       // Trigger "long" hold
-       if ((millis() - downTime) >= longHoldTime)
-       {
-           if (not longHoldEventPast)
-           {
-               event = 4;
-               longHoldEventPast = true;
-           }
-       }
-   }
-   buttonLast = buttonVal;
-   return event;
 }
