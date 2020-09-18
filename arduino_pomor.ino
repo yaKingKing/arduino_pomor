@@ -4,19 +4,19 @@
 #include <avr/sleep.h>
 #include <RTClib.h>
 #include <ezButton.h>
-#include "rtc_functionallities.h"
 
 
 // RTC Variables
 RTC_DS3231 rtc;
 #define CLOCK_INTERRUPT_PIN 3
 boolean timerTimedOut = false;
+boolean endSleep = false;
 
 // button variables
 const int buttonPin = 2;
 ezButton button(buttonPin); 
-const int SHORT_PRESS_TIME = 1000; // 1000 milliseconds
-const int LONG_PRESS_TIME  = 1000; // 1000 milliseconds
+const int SHORT_PRESS_TIME = 500; // 1000 milliseconds
+const int LONG_PRESS_TIME  = 2000; // 1000 milliseconds
 unsigned long pressedTime  = 0;
 unsigned long releasedTime = 0;
 
@@ -24,14 +24,12 @@ boolean buttonClicked = false; // clicked: ISR was fired
 boolean buttonPressed = false; // pressed: Button was hold down for a short time
 boolean buttonHold = false;    // hold:    Button was hold for a long time
 
-// timer variables
-boolean endSleep = false;
 
 // pomor variables
 #ifdef DEBUG_SHORT_POMOR_TIMES
-const unsigned long task_times[] = {25L*1000L,5L*1000L,25L*1000L,5L*1000L,25L*1000L,5L*1000L,25L*1000L,20L*1000L};
+const unsigned long task_times[] = {25L,5L,25L,5L,25L,5L,25L,20L};
 #else
-const unsigned long task_times[] = {25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,5L*60L*1000L,25L*60L*1000L,20L*60L*1000L};
+const unsigned long task_times[] = {25L*60L,5L*60L,25L*60L,5L*60L,25L*60L,5L*60L,25L*60L,20L*60L};
 #endif
 int current_task = 0;
 DateTime taskStartTime; // time the current task was started 
@@ -105,17 +103,11 @@ void loop() {
   ledUpdate();
   notifyUpdate();
   rtcUpdate();
+  buttonUpdate();
   
   
   if (!notify && !currentlyShowingTaskProgress && !currentlyShowingCurrentTask){
-    debug("/- sleep");
     sleep();
-    #ifdef DEBUG
-    if(buttonPressed) Serial.println("\\- woke up (button press)");
-    if(buttonHold) Serial.println("\\- woke up (button hold)");
-    if(timerTimedOut) Serial.println("\\- woke up (timer)");
-    if(!buttonPressed && !buttonHold && !timerTimedOut) Serial.println("\\- woke up (unknown)");
-    #endif
   }
   
 }
@@ -129,6 +121,66 @@ void rtcUpdate(){
 }
 
 
+void timerTimeoutISR(){
+  //detachInterrupt(digitalPinToInterrupt(buttonPin));
+  #ifdef DEBUG
+  Serial.println("_ISR_: timed out");
+  #endif
+  timerTimedOut = true;
+  endSleep = true;
+}
+
+void initRTC(){
+    // initializing the rtc
+    if(!rtc.begin()) {
+        Serial.println("Couldn't find RTC!");
+        Serial.flush();
+        abort();
+    }
+    
+    if(rtc.lostPower()) {
+        // this will adjust to the date and time at compilation
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
+    
+    //we don't need the 32K Pin, so disable it
+    rtc.disable32K();
+    
+    // Making it so, that the alarm will trigger an interrupt
+    pinMode(CLOCK_INTERRUPT_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(CLOCK_INTERRUPT_PIN), timerTimeoutISR, FALLING);
+    
+    // set alarm 1, 2 flag to false (so alarm 1, 2 didn't happen so far)
+    // if not done, this easily leads to problems, as both register aren't reset on reboot/recompile
+    rtc.clearAlarm(1);
+    rtc.clearAlarm(2);
+    
+    // stop oscillating signals at SQW Pin
+    // otherwise setAlarm1 will fail
+    rtc.writeSqwPinMode(DS3231_OFF);
+    
+    // turn off alarm 2 (in case it isn't off already)
+    // again, this isn't done at reboot, so a previously set alarm could easily go overlooked
+    rtc.disableAlarm(2);
+}
+
+
+void setTimerIn(TimeSpan timerTime){
+  #ifdef DEBUG
+  Serial.println("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
+  #endif
+  rtc.clearAlarm(1);
+  taskStartTime = rtc.now();
+  timerTimedOut = false;
+  if(!rtc.setAlarm1(
+          taskStartTime + timerTime,
+          DS3231_A1_Hour
+  )) {
+    #ifdef DEBUG
+    Serial.println("Error, alarm wasn't set!");
+    #endif
+  }
+}
 
 
 void debug(char* message){
@@ -149,15 +201,19 @@ void buttonUpdate() {
 
     long pressDuration = releasedTime - pressedTime;
 
-    if( pressDuration < SHORT_PRESS_TIME )
-      Serial.println("A short press is detected");
+    if( pressDuration < SHORT_PRESS_TIME ){
+      Serial.println("** A short press is detected");
       endSleep = true;
+      buttonHold = false;
       buttonPressed = true;
+    }
 
-    if( pressDuration > LONG_PRESS_TIME )
-      Serial.println("A long press is detected");
+    if( pressDuration > LONG_PRESS_TIME ){
+      Serial.println("** A long press is detected");
       endSleep = true;
+      buttonPressed = false;
       buttonHold = true;
+    }
   }
 }
 
@@ -179,7 +235,7 @@ void pauseUntilInterrupt(){
   rtc.clearAlarm(1);
   // time that we already did the task
   TimeSpan processedTime =  rtc.now() - taskStartTime;
-  TimeSpan taskTime = TimeSpan((task_times[current_task]/1000L));
+  TimeSpan taskTime = TimeSpan((task_times[current_task]));
   sleep();
   setTimerIn( taskTime - processedTime );
 }
@@ -188,6 +244,7 @@ void pauseUntilInterrupt(){
 void sleep(){
   #ifdef DEBUG
   // delay for last serial println to finish
+  Serial.println("/- sleep");
   delay(20);
   #endif
   // sleep until some functionallity ends the sleep
@@ -203,9 +260,18 @@ void sleep(){
     #endif
     buttonUpdate();
   }
+  #ifdef DEBUG
+  if(buttonPressed) Serial.println("\\- woke up (button press)");
+  if(buttonHold) Serial.println("\\- woke up (button hold)");
+  if(timerTimedOut) Serial.println("\\- woke up (timer)");
+  if(!buttonPressed && !buttonHold && !timerTimedOut) Serial.println("\\- woke up (unknown)");
+  #endif
 }
 
 
+void setTimerForCurrentTask(){
+  setTimerIn(TimeSpan(task_times[current_task]));
+}
 
 
 
@@ -221,15 +287,6 @@ void buttonPressedISR(){
   Serial.println("_ISR_: Button clicked");
   #endif
  buttonClicked = true;
-}
-
-void timerTimeoutISR(){
-  //detachInterrupt(digitalPinToInterrupt(buttonPin));
-  #ifdef DEBUG
-  Serial.println("_ISR_: timed out");
-  #endif
-  timerTimedOut = true;
-  endSleep = true;
 }
 
 
