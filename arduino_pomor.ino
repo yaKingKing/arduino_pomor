@@ -3,7 +3,6 @@
 #include "notes.h"
 #include <avr/sleep.h>
 #include <RTClib.h>
-#include <ezButton.h>
 
 
 // RTC Variables
@@ -13,10 +12,12 @@ boolean timerTimedOut = false;
 boolean endSleep = false;
 
 // button variables
-const int buttonPin = 2;
-ezButton button(buttonPin); 
+#define BUTTON_PIN 2
 const int SHORT_PRESS_TIME = 500; // 1000 milliseconds
 const int LONG_PRESS_TIME  = 2000; // 1000 milliseconds
+
+int lastState = LOW;  // the previous state from the input pin
+int currentState;     // the current reading from the input pin
 unsigned long pressedTime  = 0;
 unsigned long releasedTime = 0;
 
@@ -36,6 +37,9 @@ DateTime taskStartTime; // time the current task was started
 const int showCurrentTaskProgressLedTime = 1000;   // ms led show: how long do the leds shine when showing the current progress of a task
 boolean currentlyShowingTaskProgress = false;
 boolean currentlyShowingCurrentTask = false;
+
+bool isPressing = false;
+bool isLongDetected = false;
 
 
 // Led variables
@@ -191,30 +195,33 @@ void debug(char* message){
 
 
 void buttonUpdate() {
-  button.loop(); // MUST call the loop() function first
+  
+  // read the state of the switch/button:
+  currentState = digitalRead(BUTTON_PIN);
 
-  if(button.isPressed())
+  if(lastState == HIGH && currentState == LOW) {        // button is pressed
     pressedTime = millis();
-
-  if(button.isReleased()) {
-    releasedTime = millis();
-
-    long pressDuration = releasedTime - pressedTime;
-
-    if( pressDuration < SHORT_PRESS_TIME ){
-      Serial.println("** A short press is detected");
-      endSleep = true;
-      buttonHold = false;
+    isPressing = true;
+    isLongDetected = false;
+  } else if(lastState == LOW && currentState == HIGH) { // button is released
+    isPressing = false;
+    long pressDuration = millis() - pressedTime;
+    if (pressDuration < LONG_PRESS_TIME && pressDuration >= SHORT_PRESS_TIME){
       buttonPressed = true;
     }
+  }
 
-    if( pressDuration > LONG_PRESS_TIME ){
-      Serial.println("** A long press is detected");
-      endSleep = true;
-      buttonPressed = false;
+  if(isPressing) {
+    long pressDuration = millis() - pressedTime;
+
+    if( pressDuration >= LONG_PRESS_TIME ) {
+      Serial.println("A long press is detected");
       buttonHold = true;
     }
   }
+
+  // save the the last state
+  lastState = currentState;
 }
 
 
@@ -412,7 +419,7 @@ void notifyUpdate(){
 // --------------------------------- //
 
 void initLeds(){
-  pinMode(buttonPin, INPUT);
+  pinMode(BUTTON_PIN, INPUT);
   pinMode(redLedPin, OUTPUT);
   pinMode(greenLedPin, OUTPUT);
   for (int i = 0; i<4; i++){
@@ -429,7 +436,7 @@ void initBuzzer(){
 }
 
 void initButton(){
-  attachInterrupt(digitalPinToInterrupt(buttonPin),buttonPressedISR,FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN),buttonPressedISR,FALLING);
 }
 
 void ledUpdate(){
