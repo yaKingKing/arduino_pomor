@@ -15,7 +15,7 @@ boolean endSleep = false;
 #define BUTTON_PIN 2
 const int SHORT_PRESS_TIME = 500; // 1000 milliseconds
 const int LONG_PRESS_TIME  = 2000; // 1000 milliseconds
-
+unsigned long buttonDownCnt = 0;
 int lastState = LOW;  // the previous state from the input pin
 int currentState;     // the current reading from the input pin
 unsigned long pressedTime  = 0;
@@ -99,7 +99,9 @@ void loop() {
     debug("-> start pause");
     showPause();
     pauseUntilInterrupt();
-    turnOfLeds();
+    buttonPressed = false;
+    buttonHold = false;
+    showCurrentTask();
   }
 
 
@@ -107,7 +109,6 @@ void loop() {
   ledUpdate();
   notifyUpdate();
   rtcUpdate();
-  buttonUpdate();
   
   
   if (!notify && !currentlyShowingTaskProgress && !currentlyShowingCurrentTask){
@@ -194,38 +195,6 @@ void debug(char* message){
 }
 
 
-void buttonUpdate() {
-  
-  // read the state of the switch/button:
-  currentState = digitalRead(BUTTON_PIN);
-
-  if(lastState == HIGH && currentState == LOW) {        // button is pressed
-    pressedTime = millis();
-    isPressing = true;
-    isLongDetected = false;
-  } else if(lastState == LOW && currentState == HIGH) { // button is released
-    isPressing = false;
-    long pressDuration = millis() - pressedTime;
-    if (pressDuration < LONG_PRESS_TIME && pressDuration >= SHORT_PRESS_TIME){
-      buttonPressed = true;
-    }
-  }
-
-  if(isPressing) {
-    long pressDuration = millis() - pressedTime;
-
-    if( pressDuration >= LONG_PRESS_TIME ) {
-      Serial.println("A long press is detected");
-      buttonHold = true;
-    }
-  }
-
-  // save the the last state
-  lastState = currentState;
-}
-
-
-
 
 
 
@@ -265,7 +234,6 @@ void sleep(){
     #ifdef DEBUG
     Serial.println("|- interrupt");
     #endif
-    buttonUpdate();
   }
   #ifdef DEBUG
   if(buttonPressed) Serial.println("\\- woke up (button press)");
@@ -293,7 +261,31 @@ void buttonPressedISR(){
   #ifdef DEBUG
   Serial.println("_ISR_: Button clicked");
   #endif
- buttonClicked = true;
+
+  buttonDownCnt = 0;
+  while( (digitalRead(BUTTON_PIN) == LOW) && (buttonDownCnt < 200000) ){
+    buttonDownCnt++;
+  }
+  if(buttonDownCnt >= 200000){
+    buttonHold = true;
+    buttonPressed = false;
+    endSleep = true;
+    #ifdef DEBUG
+    Serial.println("-- B: hold for "+String(buttonDownCnt));
+    #endif
+  }else if(buttonDownCnt >= 500){
+    buttonHold = false;
+    buttonPressed = true;
+    endSleep = true;
+    #ifdef DEBUG
+    Serial.println("-- B: click for "+String(buttonDownCnt));
+    #endif
+  }else{
+    #ifdef DEBUG
+    Serial.println("-- B: To Short Button Down: "+String(buttonDownCnt));
+    #endif
+  }
+  
 }
 
 
@@ -305,7 +297,7 @@ void buttonPressedISR(){
 // show task
 void showCurrentTaskProgress(){
   TimeSpan passedTime = rtc.now() - taskStartTime;
-  int n_leds = min( ( (passedTime.totalseconds()*5)  /   (task_times[current_task]/1000) )  ,4);
+  int n_leds = min( ( (passedTime.totalseconds()*5)  /   (task_times[current_task]) )  ,4);
   #ifdef DEBUG
   Serial.println("   passedTime: "+String(passedTime.minutes())+" min, "+String(passedTime.seconds())+" sec ("+String(n_leds)+" leds)");
   #endif
@@ -440,9 +432,6 @@ void initButton(){
 }
 
 void ledUpdate(){
-  
-
-  
   if (currentlyShowingTaskProgress || currentlyShowingCurrentTask){
     if (turnOfLedsAtTime <= millis()){
         currentlyShowingTaskProgress = false;
