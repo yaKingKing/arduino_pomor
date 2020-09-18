@@ -1,4 +1,4 @@
-//#define DEBUG
+#define DEBUG
 //#define DEBUG_SHORT_POMOR_TIMES
 #include "notes.h"
 #include <avr/sleep.h>
@@ -17,6 +17,8 @@ unsigned long buttonDownCnt = 0;
 boolean buttonPressed = false;
 boolean buttonHold = false;
 
+// timer variables
+boolean endSleep = false;
 
 // pomor variables
 #ifdef DEBUG_SHORT_POMOR_TIMES
@@ -178,8 +180,10 @@ void loop() {
     #endif
     sleep();
     #ifdef DEBUG
-    if(buttonPressed) Serial.println("\\- woke up (button)");
+    if(buttonPressed) Serial.println("\\- woke up (button press)");
+    else if(buttonHold) Serial.println("\\- woke up (button hold)");
     else if(timerTimedOut) Serial.println("\\- woke up (timer)");
+    else Serial.println("\\- woke up (unknown)");
     #endif
   }
   
@@ -207,14 +211,34 @@ void ledUpdate(){
     }
 }
 
+
+
+// ----------------------------- //
+//                               //
+//    arduino sleep functions    //
+//                               //
+// ----------------------------- //
+
+
+void pauseUntilInterrupt(){
+  rtc.clearAlarm(1);
+  // time that we already did the task
+  TimeSpan processedTime =  rtc.now() - taskStartTime;
+  TimeSpan taskTime = TimeSpan((task_times[current_task]/1000L));
+  delay(100);
+  sleep();
+  setTimerIn( taskTime - processedTime );
+}
+
+
 void sleep(){
   #ifdef DEBUG
   // delay for last serial println to finish
   delay(20);
   #endif
-  
-  // sleep until either the button is pressed or the timer is timed out
-  while (!buttonPressed && !timerTimedOut && !buttonHold){
+  // sleep until some functionallity ends the sleep
+  endSleep = false;
+  while (!endSleep){
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     sleep_enable();
     sleep_mode();
@@ -230,7 +254,7 @@ void setTimerForCurrentTask(){
   setTimerIn(TimeSpan(task_times[current_task]/1000L));
 }
 void setTimerIn(TimeSpan timerTime){
-   #ifdef DEBUG
+  #ifdef DEBUG
   Serial.println("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
   #endif
   rtc.clearAlarm(1);
@@ -240,11 +264,70 @@ void setTimerIn(TimeSpan timerTime){
           taskStartTime + timerTime,
           DS3231_A1_Hour
   )) {
-     #ifdef DEBUG
-      Serial.println("Error, alarm wasn't set!");
-      #endif
+    #ifdef DEBUG
+    Serial.println("Error, alarm wasn't set!");
+    #endif
   }
 }
+
+
+
+// --------------------------------- //
+//                                   //
+//    arduino INTERRUPT functions    //
+//                                   //
+// --------------------------------- //
+
+
+
+void buttonPressedISR(){
+  if( false && (millis()-pressedAt) <= 80){
+     #ifdef DEBUG
+    Serial.println("-- B: To close button clicks! "+String((millis()-pressedAt)));
+    #endif
+  }else{
+    //digitalWrite(greenLedPin, LOW);
+    buttonDownCnt = 0;
+    while( (digitalRead(buttonPin) == LOW) && (buttonDownCnt < 200000) ){
+      buttonDownCnt++;
+    }
+    if(buttonDownCnt >= 200000){
+      buttonHold = true;
+      buttonPressed = false;
+      endSleep = true;
+      pressedAt = millis();
+      #ifdef DEBUG
+      Serial.println("-- B: hold for "+String(buttonDownCnt));
+      #endif
+    }else if(buttonDownCnt >= 500){
+      buttonHold = false;
+      buttonPressed = true;
+      endSleep = true;
+      pressedAt = millis();
+      #ifdef DEBUG
+      Serial.println("-- B: click for "+String(buttonDownCnt));
+      #endif
+    }else{
+      #ifdef DEBUG
+      Serial.println("-- B: To Short Button Down: "+String(buttonDownCnt));
+      #endif
+    }
+  }
+}
+
+void timerTimeoutISR(){
+  //detachInterrupt(digitalPinToInterrupt(buttonPin));
+  #ifdef DEBUG
+  Serial.println("-- Timer Timeout --");
+  #endif
+  timerTimedOut = true;
+  endSleep = true;
+}
+
+
+
+
+
 
 
 // show task
@@ -314,16 +397,6 @@ void stopNotifying(){
 }
 
 
-// pause
-void pauseUntilInterrupt(){
-  rtc.clearAlarm(1);
-  // time that we already did the task
-  TimeSpan processedTime =  rtc.now() - taskStartTime;
-  TimeSpan taskTime = TimeSpan((task_times[current_task]/1000L));
-  sleep();
-  setTimerIn( taskTime - processedTime );
-}
-
 
 
 // update functions
@@ -363,50 +436,6 @@ void notify_update(){
   }
 }
 
-
-
-
-
-void buttonPressedISR(){
-  if( (millis()-pressedAt) <= 80){
-     #ifdef DEBUG
-    Serial.println("-- B: To close button clicks! "+String((millis()-pressedAt)));
-    #endif
-  }else{
-    //digitalWrite(greenLedPin, LOW);
-    buttonDownCnt = 0;
-    while( (digitalRead(buttonPin) == LOW) && (buttonDownCnt < 200000) ){
-      buttonDownCnt++;
-    }
-    if(buttonDownCnt >= 200000){
-      buttonHold = true;
-      buttonPressed = false;
-      pressedAt = millis();
-      #ifdef DEBUG
-      Serial.println("-- B: hold for "+String(buttonDownCnt));
-      #endif
-    }else if(buttonDownCnt >= 500){
-      buttonHold = false;
-      buttonPressed = true;
-      pressedAt = millis();
-      #ifdef DEBUG
-      Serial.println("-- B: click for "+String(buttonDownCnt));
-      #endif
-    }else{
-      #ifdef DEBUG
-      Serial.println("-- B: To Short Button Down: "+String(buttonDownCnt));
-      #endif
-    }
-  }
-}
-
-void timerTimeoutISR(){
-  //detachInterrupt(digitalPinToInterrupt(buttonPin));
-  #ifdef DEBUG
-  Serial.println("-- Timer Timeout --");
-  #endif
-  timerTimedOut = true;
-}
 
 
 
