@@ -3,6 +3,8 @@
 #include "notes.h"
 #include <avr/sleep.h>
 #include <RTClib.h>
+#include <ezButton.h>
+#include "rtc_functionallities.h"
 
 
 // RTC Variables
@@ -12,10 +14,15 @@ boolean timerTimedOut = false;
 
 // button variables
 const int buttonPin = 2;
-unsigned long pressedAt = 0;
-unsigned long buttonDownCnt = 0;
-boolean buttonPressed = false;
-boolean buttonHold = false;
+ezButton button(buttonPin); 
+const int SHORT_PRESS_TIME = 1000; // 1000 milliseconds
+const int LONG_PRESS_TIME  = 1000; // 1000 milliseconds
+unsigned long pressedTime  = 0;
+unsigned long releasedTime = 0;
+
+boolean buttonClicked = false; // clicked: ISR was fired
+boolean buttonPressed = false; // pressed: Button was hold down for a short time
+boolean buttonHold = false;    // hold:    Button was hold for a long time
 
 // timer variables
 boolean endSleep = false;
@@ -57,93 +64,29 @@ void setup() {
   Serial.begin(115200);
   Serial.println("start");
   #endif
-  
-  pinMode(buttonPin, INPUT);
-  pinMode(redLedPin, OUTPUT);
-  pinMode(greenLedPin, OUTPUT);
-  pinMode(buzzerPin, OUTPUT);
-  for (int i = 0; i<4; i++){
-    pinMode(led_array_pins[i], OUTPUT);
-    digitalWrite(led_array_pins[i], HIGH);
-  }
-  digitalWrite(buzzerPin, LOW);
-  digitalWrite(redLedPin, HIGH);
-  digitalWrite(greenLedPin, HIGH);
-  iterateAllLeds(); // show some startup animation
+  initLeds();
+  initBuzzer();
   initRTC();
-  attachInterrupt(digitalPinToInterrupt(buttonPin),buttonPressedISR,FALLING);
-  setTimerForCurrentTask();
+  initButton();
+  setTimerForCurrentTask(); // directly start pomodoro task
+  iterateAllLeds(); // show some startup animation
 }
 
-void initRTC(){
-    // initializing the rtc
-    if(!rtc.begin()) {
-        Serial.println("Couldn't find RTC!");
-        Serial.flush();
-        abort();
-    }
-    
-    if(rtc.lostPower()) {
-        // this will adjust to the date and time at compilation
-        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    }
-    
-    //we don't need the 32K Pin, so disable it
-    rtc.disable32K();
-    
-    // Making it so, that the alarm will trigger an interrupt
-    pinMode(CLOCK_INTERRUPT_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(CLOCK_INTERRUPT_PIN), timerTimeoutISR, FALLING);
-    
-    // set alarm 1, 2 flag to false (so alarm 1, 2 didn't happen so far)
-    // if not done, this easily leads to problems, as both register aren't reset on reboot/recompile
-    rtc.clearAlarm(1);
-    rtc.clearAlarm(2);
-    
-    // stop oscillating signals at SQW Pin
-    // otherwise setAlarm1 will fail
-    rtc.writeSqwPinMode(DS3231_OFF);
-    
-    // turn off alarm 2 (in case it isn't off already)
-    // again, this isn't done at reboot, so a previously set alarm could easily go overlooked
-    rtc.disableAlarm(2);
-}
-
-void iterateAllLeds(){
-  for (int i = 0; i<4; i++){
-    digitalWrite(led_array_pins[i], LOW);
-    delay(200);
-    digitalWrite(led_array_pins[i], HIGH);
-  }
-  digitalWrite(redLedPin, LOW);
-  delay(200);
-  digitalWrite(redLedPin, HIGH);
-  digitalWrite(greenLedPin, LOW);
-  delay(200);
-  digitalWrite(greenLedPin, HIGH);
-}
 
 void loop() {
-
 
   if(buttonPressed){
     buttonPressed = false;
     if(notify){
-      #ifdef DEBUG
-      Serial.println("-> stop Notifying, start next task");
-      #endif
+      debug("-> stop Notifying, start next task");
       stopNotifying();
       startNextTask();
       showCurrentTask();
     } else if (!currentlyShowingTaskProgress && !currentlyShowingCurrentTask ){
-      #ifdef DEBUG
-      Serial.println("-> show current task progress");
-      #endif
+      debug("-> show current task progress");
       showCurrentTaskProgress();
     }else  if ( currentlyShowingTaskProgress || currentlyShowingCurrentTask ){
-      #ifdef DEBUG
-      Serial.println("-> skip current task");
-      #endif
+      debug("-> skip current task");
       startNextTask();
       showCurrentTask();
     }
@@ -151,9 +94,7 @@ void loop() {
 
   if(buttonHold){
     buttonHold = false;
-    #ifdef DEBUG
-    Serial.println("-> start pause");
-    #endif
+    debug("-> start pause");
     showPause();
     pauseUntilInterrupt();
     turnOfLeds();
@@ -161,55 +102,68 @@ void loop() {
 
 
   // update shit
+  ledUpdate();
+  notifyUpdate();
+  rtcUpdate();
   
-  if (rtc.alarmFired(1)){
-    #ifdef DEBUG
-    Serial.println("-> notify end of task");
-    #endif
-    rtc.clearAlarm(1);
-    startNotify();
-  }
-
-  if (notify){
-    notify_update();
-  }else  if (currentlyShowingTaskProgress || currentlyShowingCurrentTask){
-    ledUpdate();
-  }else  if (!notify && !currentlyShowingTaskProgress && !currentlyShowingCurrentTask){
-    #ifdef DEBUG
-    Serial.println("/- sleep");
-    #endif
+  
+  if (!notify && !currentlyShowingTaskProgress && !currentlyShowingCurrentTask){
+    debug("/- sleep");
     sleep();
     #ifdef DEBUG
     if(buttonPressed) Serial.println("\\- woke up (button press)");
-    else if(buttonHold) Serial.println("\\- woke up (button hold)");
-    else if(timerTimedOut) Serial.println("\\- woke up (timer)");
-    else Serial.println("\\- woke up (unknown)");
+    if(buttonHold) Serial.println("\\- woke up (button hold)");
+    if(timerTimedOut) Serial.println("\\- woke up (timer)");
+    if(!buttonPressed && !buttonHold && !timerTimedOut) Serial.println("\\- woke up (unknown)");
     #endif
   }
   
+}
 
-  
+void rtcUpdate(){
+  if (rtc.alarmFired(1)){
+    debug("-> notify end of task");
+    rtc.clearAlarm(1);
+    startNotify();
+  }
 }
 
 
 
 
-
-
-
-
-
-
-
-
-
-void ledUpdate(){
-  if (turnOfLedsAtTime <= millis()){
-      currentlyShowingTaskProgress = false;
-      currentlyShowingCurrentTask = false;
-      turnOfLeds();
-    }
+void debug(char* message){
+  #ifdef DEBUG
+  Serial.println(message);
+  #endif
 }
+
+
+void buttonUpdate() {
+  button.loop(); // MUST call the loop() function first
+
+  if(button.isPressed())
+    pressedTime = millis();
+
+  if(button.isReleased()) {
+    releasedTime = millis();
+
+    long pressDuration = releasedTime - pressedTime;
+
+    if( pressDuration < SHORT_PRESS_TIME )
+      Serial.println("A short press is detected");
+      endSleep = true;
+      buttonPressed = true;
+
+    if( pressDuration > LONG_PRESS_TIME )
+      Serial.println("A long press is detected");
+      endSleep = true;
+      buttonHold = true;
+  }
+}
+
+
+
+
 
 
 
@@ -221,11 +175,11 @@ void ledUpdate(){
 
 
 void pauseUntilInterrupt(){
+  // we do not want to weak up when the task is done
   rtc.clearAlarm(1);
   // time that we already did the task
   TimeSpan processedTime =  rtc.now() - taskStartTime;
   TimeSpan taskTime = TimeSpan((task_times[current_task]/1000L));
-  delay(100);
   sleep();
   setTimerIn( taskTime - processedTime );
 }
@@ -243,32 +197,15 @@ void sleep(){
     sleep_enable();
     sleep_mode();
     sleep_disable();
+    delay(100);
     #ifdef DEBUG
     Serial.println("|- interrupt");
     #endif
+    buttonUpdate();
   }
 }
 
 
-void setTimerForCurrentTask(){
-  setTimerIn(TimeSpan(task_times[current_task]/1000L));
-}
-void setTimerIn(TimeSpan timerTime){
-  #ifdef DEBUG
-  Serial.println("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
-  #endif
-  rtc.clearAlarm(1);
-  taskStartTime = rtc.now();
-  timerTimedOut = false;
-  if(!rtc.setAlarm1(
-          taskStartTime + timerTime,
-          DS3231_A1_Hour
-  )) {
-    #ifdef DEBUG
-    Serial.println("Error, alarm wasn't set!");
-    #endif
-  }
-}
 
 
 
@@ -279,46 +216,17 @@ void setTimerIn(TimeSpan timerTime){
 // --------------------------------- //
 
 
-
 void buttonPressedISR(){
-  if( false && (millis()-pressedAt) <= 80){
-     #ifdef DEBUG
-    Serial.println("-- B: To close button clicks! "+String((millis()-pressedAt)));
-    #endif
-  }else{
-    //digitalWrite(greenLedPin, LOW);
-    buttonDownCnt = 0;
-    while( (digitalRead(buttonPin) == LOW) && (buttonDownCnt < 200000) ){
-      buttonDownCnt++;
-    }
-    if(buttonDownCnt >= 200000){
-      buttonHold = true;
-      buttonPressed = false;
-      endSleep = true;
-      pressedAt = millis();
-      #ifdef DEBUG
-      Serial.println("-- B: hold for "+String(buttonDownCnt));
-      #endif
-    }else if(buttonDownCnt >= 500){
-      buttonHold = false;
-      buttonPressed = true;
-      endSleep = true;
-      pressedAt = millis();
-      #ifdef DEBUG
-      Serial.println("-- B: click for "+String(buttonDownCnt));
-      #endif
-    }else{
-      #ifdef DEBUG
-      Serial.println("-- B: To Short Button Down: "+String(buttonDownCnt));
-      #endif
-    }
-  }
+  #ifdef DEBUG
+  Serial.println("_ISR_: Button clicked");
+  #endif
+ buttonClicked = true;
 }
 
 void timerTimeoutISR(){
   //detachInterrupt(digitalPinToInterrupt(buttonPin));
   #ifdef DEBUG
-  Serial.println("-- Timer Timeout --");
+  Serial.println("_ISR_: timed out");
   #endif
   timerTimedOut = true;
   endSleep = true;
@@ -400,43 +308,101 @@ void stopNotifying(){
 
 
 // update functions
-void notify_update(){
-  // blink all leds
-  while ((millis()-pulseStart) > pulseTimes[pulseI]){
-    pulseStart += pulseTimes[pulseI];
-    pulseI += 1;
-    if (pulseI == 4){
-      pulseI = 0;
-      pulseLoops += 1;
-    }
-    if (pulseLoops == 2){
-      tone(buzzerPin, NOTE_D1, 100);
-    }
-    if (pulseLoops >= 10 && pulseLoops <= 14 && pulseLoops%2 == 0){
-      tone(buzzerPin, NOTE_A2, 100);
-    }
-  }
-  if (pulseLoops > 35){
-     stopNotifying();
-     startNextTask();
-     pauseUntilInterrupt();
-     return;
-  }
-  bool pulseAmplitude = pulseI%2;
-  if (pulseAmplitude){
-    turnOnLeds();
-    if (pulseLoops >= 23){
-        digitalWrite(8, HIGH);
+void notifyUpdate(){
+  if (notify){
+    // blink all leds
+    while ((millis()-pulseStart) > pulseTimes[pulseI]){
+      pulseStart += pulseTimes[pulseI];
+      pulseI += 1;
+      if (pulseI == 4){
+        pulseI = 0;
+        pulseLoops += 1;
       }
-  }else{
-    turnOfLeds();
-    if (pulseLoops >= 23){
-        digitalWrite(8, LOW);
+      if (pulseLoops == 2){
+        tone(buzzerPin, NOTE_D1, 100);
+      }
+      if (pulseLoops >= 10 && pulseLoops <= 14 && pulseLoops%2 == 0){
+        tone(buzzerPin, NOTE_A2, 100);
+      }
+    }
+    if (pulseLoops > 35){
+       stopNotifying();
+       startNextTask();
+       pauseUntilInterrupt();
+       return;
+    }
+    bool pulseAmplitude = pulseI%2;
+    if (pulseAmplitude){
+      turnOnLeds();
+      if (pulseLoops >= 23){
+          digitalWrite(8, HIGH);
+        }
+    }else{
+      turnOfLeds();
+      if (pulseLoops >= 23){
+          digitalWrite(8, LOW);
+      }
     }
   }
 }
 
 
+
+// --------------------------------- //
+//                                   //
+//   arduino led/output functions    //
+//                                   //
+// --------------------------------- //
+
+void initLeds(){
+  pinMode(buttonPin, INPUT);
+  pinMode(redLedPin, OUTPUT);
+  pinMode(greenLedPin, OUTPUT);
+  for (int i = 0; i<4; i++){
+    pinMode(led_array_pins[i], OUTPUT);
+    digitalWrite(led_array_pins[i], HIGH);
+  }
+  digitalWrite(redLedPin, HIGH);
+  digitalWrite(greenLedPin, HIGH);
+}
+
+void initBuzzer(){
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);  
+}
+
+void initButton(){
+  attachInterrupt(digitalPinToInterrupt(buttonPin),buttonPressedISR,FALLING);
+}
+
+void ledUpdate(){
+  
+
+  
+  if (currentlyShowingTaskProgress || currentlyShowingCurrentTask){
+    if (turnOfLedsAtTime <= millis()){
+        currentlyShowingTaskProgress = false;
+        currentlyShowingCurrentTask = false;
+        turnOfLeds();
+      }
+  }
+}
+
+
+
+void iterateAllLeds(){
+  for (int i = 0; i<4; i++){
+    digitalWrite(led_array_pins[i], LOW);
+    delay(200);
+    digitalWrite(led_array_pins[i], HIGH);
+  }
+  digitalWrite(redLedPin, LOW);
+  delay(200);
+  digitalWrite(redLedPin, HIGH);
+  digitalWrite(greenLedPin, LOW);
+  delay(200);
+  digitalWrite(greenLedPin, HIGH);
+}
 
 
 
