@@ -1,64 +1,71 @@
-#define DEBUG
-//#define DEBUG_SHORT_POMOR_TIMES
 #include "notes.h"
 #include <avr/sleep.h>
 #include <RTClib.h>
 
 
+//debug variables
+#define DEBUG
+//#define DEBUG_SHORT_POMOR_TIMES
+
+
+// pin setup
+#define CLOCK_INTERRUPT_PIN 3
+#define BUTTON_PIN 2
+#define RED_LED_PIN 5
+#define GREEN_LED_PIN 4
+#define BUZZER_PIN 8
+const int led_array_pins[] = {14,15,16,17};
+
+
+
 // RTC Variables
 RTC_DS3231 rtc;
-#define CLOCK_INTERRUPT_PIN 3
 boolean timerTimedOut = false;
 boolean endSleep = false;
 
-// button variables
-#define BUTTON_PIN 2
-const int SHORT_PRESS_TIME = 500; // 1000 milliseconds
-const int LONG_PRESS_TIME  = 2000; // 1000 milliseconds
-unsigned long buttonDownCnt = 0;
-int lastState = LOW;  // the previous state from the input pin
-int currentState;     // the current reading from the input pin
-unsigned long pressedTime  = 0;
-unsigned long releasedTime = 0;
 
-boolean buttonClicked = false; // clicked: ISR was fired
+// button variables
+#define SHORT_BUTTON_DOWN_CNT 500
+#define LONG_BUTTON_DOWN_CNT 200000
+unsigned long buttonDownCnt = 0;
 boolean buttonPressed = false; // pressed: Button was hold down for a short time
 boolean buttonHold = false;    // hold:    Button was hold for a long time
 
 
 // pomor variables
+const unsigned long task_times[] = 
 #ifdef DEBUG_SHORT_POMOR_TIMES
-const unsigned long task_times[] = {25L,5L,25L,5L,25L,5L,25L,20L};
+  {25L,5L,25L,5L,25L,5L,25L,20L};
 #else
-const unsigned long task_times[] = {25L*60L,5L*60L,25L*60L,5L*60L,25L*60L,5L*60L,25L*60L,20L*60L};
+  {25L*60L,5L*60L,25L*60L,5L*60L,25L*60L,5L*60L,25L*60L,20L*60L};
 #endif
-int current_task = 0;
+int currentTask = 0;
+boolean pause = false;
 DateTime taskStartTime; // time the current task was started 
+
+
+// led output variables
 const int showCurrentTaskProgressLedTime = 1000;   // ms led show: how long do the leds shine when showing the current progress of a task
 boolean currentlyShowingTaskProgress = false;
 boolean currentlyShowingCurrentTask = false;
-
-bool isPressing = false;
-bool isLongDetected = false;
-
-
-// Led variables
-const int led_array_pins[] = {14,15,16,17};
-const int redLedPin = 5;
-const int greenLedPin = 4;
 unsigned long turnOfLedsAtTime = 0;
 
 
-
 // buzzer variables
-const int buzzerPin = 8;
 bool notify = false;
 const int pulseTimes[] = {100,100,500,500};
 unsigned long pulseStart = 0;
 int pulseI = 0;
 int pulseLoops = 0;
-bool pause = false;
-unsigned long pauseAt = 0;
+
+
+
+
+
+
+
+
+
 
 
 void setup() {
@@ -77,6 +84,7 @@ void setup() {
 
 void loop() {
 
+  // handle button events 
   if(buttonPressed){
     buttonPressed = false;
     if(notify){
@@ -93,15 +101,12 @@ void loop() {
       showCurrentTask();
     }
   }
-
   if(buttonHold){
     buttonHold = false;
     debug("-> start pause");
     showPause();
     pauseUntilInterrupt();
-    buttonPressed = false;
-    buttonHold = false;
-    showCurrentTask();
+    showCurrentTaskProgress();
   }
 
 
@@ -110,30 +115,19 @@ void loop() {
   notifyUpdate();
   rtcUpdate();
   
-  
+  // if nothing else is to do, go sleeping
   if (!notify && !currentlyShowingTaskProgress && !currentlyShowingCurrentTask){
     sleep();
   }
   
 }
 
-void rtcUpdate(){
-  if (rtc.alarmFired(1)){
-    debug("-> notify end of task");
-    rtc.clearAlarm(1);
-    startNotify();
-  }
-}
 
 
-void timerTimeoutISR(){
-  //detachInterrupt(digitalPinToInterrupt(buttonPin));
-  #ifdef DEBUG
-  Serial.println("_ISR_: timed out");
-  #endif
-  timerTimedOut = true;
-  endSleep = true;
-}
+
+
+
+
 
 void initRTC(){
     // initializing the rtc
@@ -196,6 +190,22 @@ void debug(char* message){
 
 
 
+// ----------------------------- //
+//                               //
+//        update functions       //
+//                               //
+// ----------------------------- //
+
+
+void rtcUpdate(){
+  if (rtc.alarmFired(1)){
+    debug("-> notify end of task");
+    rtc.clearAlarm(1);
+    startNotify();
+  }
+}
+
+
 
 
 
@@ -211,9 +221,16 @@ void pauseUntilInterrupt(){
   rtc.clearAlarm(1);
   // time that we already did the task
   TimeSpan processedTime =  rtc.now() - taskStartTime;
-  TimeSpan taskTime = TimeSpan((task_times[current_task]));
+  TimeSpan taskTime = TimeSpan((task_times[currentTask]));
   sleep();
+  // remove button events that woke up the Interrupt
+  buttonPressed = false;
+  buttonHold = false;
+  
   setTimerIn( taskTime - processedTime );
+  // override task start time, so that later calculation is successfull
+  taskStartTime = rtc.now() - processedTime;
+
 }
 
 
@@ -231,9 +248,6 @@ void sleep(){
     sleep_mode();
     sleep_disable();
     delay(100);
-    #ifdef DEBUG
-    Serial.println("|- interrupt");
-    #endif
   }
   #ifdef DEBUG
   if(buttonPressed) Serial.println("\\- woke up (button press)");
@@ -245,7 +259,7 @@ void sleep(){
 
 
 void setTimerForCurrentTask(){
-  setTimerIn(TimeSpan(task_times[current_task]));
+  setTimerIn(TimeSpan(task_times[currentTask]));
 }
 
 
@@ -257,23 +271,33 @@ void setTimerForCurrentTask(){
 // --------------------------------- //
 
 
+void timerTimeoutISR(){
+  //detachInterrupt(digitalPinToInterrupt(buttonPin));
+  #ifdef DEBUG
+  Serial.println("_ISR_: timed out");
+  #endif
+  timerTimedOut = true;
+  endSleep = true;
+}
+
+
 void buttonPressedISR(){
   #ifdef DEBUG
   Serial.println("_ISR_: Button clicked");
   #endif
 
   buttonDownCnt = 0;
-  while( (digitalRead(BUTTON_PIN) == LOW) && (buttonDownCnt < 200000) ){
+  while( (digitalRead(BUTTON_PIN) == LOW) && (buttonDownCnt < LONG_BUTTON_DOWN_CNT) ){
     buttonDownCnt++;
   }
-  if(buttonDownCnt >= 200000){
+  if(buttonDownCnt >= LONG_BUTTON_DOWN_CNT){
     buttonHold = true;
     buttonPressed = false;
     endSleep = true;
     #ifdef DEBUG
     Serial.println("-- B: hold for "+String(buttonDownCnt));
     #endif
-  }else if(buttonDownCnt >= 500){
+  }else if(buttonDownCnt >= SHORT_BUTTON_DOWN_CNT){
     buttonHold = false;
     buttonPressed = true;
     endSleep = true;
@@ -297,7 +321,7 @@ void buttonPressedISR(){
 // show task
 void showCurrentTaskProgress(){
   TimeSpan passedTime = rtc.now() - taskStartTime;
-  int n_leds = min( ( (passedTime.totalseconds()*5)  /   (task_times[current_task]) )  ,4);
+  int n_leds = min( ( (passedTime.totalseconds()*5)  /   (task_times[currentTask]) )  ,4);
   #ifdef DEBUG
   Serial.println("   passedTime: "+String(passedTime.minutes())+" min, "+String(passedTime.seconds())+" sec ("+String(n_leds)+" leds)");
   #endif
@@ -305,12 +329,12 @@ void showCurrentTaskProgress(){
   for (int i = 0; i<n_leds; i++){
     digitalWrite(led_array_pins[i], LOW);
   }
-  if (current_task%2 == 0){
+  if (currentTask%2 == 0){
    // work
-    digitalWrite(redLedPin, LOW);
+    digitalWrite(RED_LED_PIN, LOW);
   }else{
     // pause
-    digitalWrite(greenLedPin, LOW);
+    digitalWrite(GREEN_LED_PIN, LOW);
   }
   turnOfLedsAtTime = millis() + showCurrentTaskProgressLedTime;
   currentlyShowingTaskProgress = true;
@@ -318,13 +342,13 @@ void showCurrentTaskProgress(){
 }
 void showCurrentTask(){
   turnOfLeds();
-  digitalWrite(led_array_pins[current_task/2], LOW);
-  if (current_task%2 == 0){
+  digitalWrite(led_array_pins[currentTask/2], LOW);
+  if (currentTask%2 == 0){
    // work
-    digitalWrite(redLedPin, LOW);
+    digitalWrite(RED_LED_PIN, LOW);
   }else{
     // pause
-    digitalWrite(greenLedPin, LOW);
+    digitalWrite(GREEN_LED_PIN, LOW);
   }
   turnOfLedsAtTime = millis() + 3000;
   currentlyShowingTaskProgress = false;
@@ -334,16 +358,16 @@ void showPause(){
   currentlyShowingTaskProgress = false;
   currentlyShowingCurrentTask = false;
   turnOfLeds();
-  digitalWrite(greenLedPin, LOW);
-  digitalWrite(redLedPin, LOW);
-  digitalWrite(led_array_pins[current_task/2], LOW);
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(led_array_pins[currentTask/2], LOW);
 }
 
 
 
 // skip task
 void startNextTask(){
-  current_task = (current_task+1) % 8;
+  currentTask = (currentTask+1) % 8;
   setTimerForCurrentTask();
 }
 
@@ -355,7 +379,7 @@ void startNotify(){
 void stopNotifying(){
   notify = false;
   turnOfLeds();
-  digitalWrite(buzzerPin, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
   pulseI = 0;
   pulseLoops = 0;
 }
@@ -375,16 +399,17 @@ void notifyUpdate(){
         pulseLoops += 1;
       }
       if (pulseLoops == 2){
-        tone(buzzerPin, NOTE_D1, 100);
+        tone(BUZZER_PIN, NOTE_D1, 100);
       }
       if (pulseLoops >= 10 && pulseLoops <= 14 && pulseLoops%2 == 0){
-        tone(buzzerPin, NOTE_A2, 100);
+        tone(BUZZER_PIN, NOTE_A2, 100);
       }
     }
     if (pulseLoops > 35){
        stopNotifying();
-       startNextTask();
        pauseUntilInterrupt();
+       startNextTask();
+       showCurrentTaskProgress();
        return;
     }
     bool pulseAmplitude = pulseI%2;
@@ -412,19 +437,19 @@ void notifyUpdate(){
 
 void initLeds(){
   pinMode(BUTTON_PIN, INPUT);
-  pinMode(redLedPin, OUTPUT);
-  pinMode(greenLedPin, OUTPUT);
+  pinMode(RED_LED_PIN, OUTPUT);
+  pinMode(GREEN_LED_PIN, OUTPUT);
   for (int i = 0; i<4; i++){
     pinMode(led_array_pins[i], OUTPUT);
     digitalWrite(led_array_pins[i], HIGH);
   }
-  digitalWrite(redLedPin, HIGH);
-  digitalWrite(greenLedPin, HIGH);
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  digitalWrite(RED_LED_PIN, HIGH);
 }
 
 void initBuzzer(){
-  pinMode(buzzerPin, OUTPUT);
-  digitalWrite(buzzerPin, LOW);  
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);  
 }
 
 void initButton(){
@@ -449,12 +474,12 @@ void iterateAllLeds(){
     delay(200);
     digitalWrite(led_array_pins[i], HIGH);
   }
-  digitalWrite(redLedPin, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
   delay(200);
-  digitalWrite(redLedPin, HIGH);
-  digitalWrite(greenLedPin, LOW);
+  digitalWrite(RED_LED_PIN, HIGH);
+  digitalWrite(GREEN_LED_PIN, LOW);
   delay(200);
-  digitalWrite(greenLedPin, HIGH);
+  digitalWrite(GREEN_LED_PIN, HIGH);
 }
 
 
@@ -486,6 +511,6 @@ void writeAllLeds(bool state){
   for (int i = 0; i<4; i++){
     digitalWrite(led_array_pins[i], state);
   }
-  digitalWrite(redLedPin, state);
-  digitalWrite(greenLedPin, state);
+  digitalWrite(RED_LED_PIN, state);
+  digitalWrite(GREEN_LED_PIN, state);
 }
