@@ -11,10 +11,10 @@
 // pin setup
 #define CLOCK_INTERRUPT_PIN 3
 #define BUTTON_PIN 2
-#define RED_LED_PIN 5
-#define GREEN_LED_PIN 4
-#define BUZZER_PIN 8
-const int led_array_pins[] = {14,15,16,17};
+#define RED_LED_PIN 6
+#define GREEN_LED_PIN 5
+#define BUZZER_PIN 4
+const int led_array_pins[] = {9,10,11,12};
 
 
 
