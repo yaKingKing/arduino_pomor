@@ -165,9 +165,7 @@ void initRTC(){
 
 
 void setTimerIn(TimeSpan timerTime){
-  #ifdef DEBUG
-  Serial.println("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
-  #endif
+  debug("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
   rtc.clearAlarm(1);
   taskStartTime = rtc.now();
   timerTimedOut = false;
@@ -175,17 +173,13 @@ void setTimerIn(TimeSpan timerTime){
           taskStartTime + timerTime,
           DS3231_A1_Hour
   )) {
-    #ifdef DEBUG
-    Serial.println("Error, alarm wasn't set!");
-    #endif
+    debug("Error, alarm wasn't set!");
   }
 }
 
 
 void debug(char* message){
-  #ifdef DEBUG
-  Serial.println(message);
-  #endif
+  debug(message);
 }
 
 
