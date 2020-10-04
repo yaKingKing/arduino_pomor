@@ -4,7 +4,7 @@
 
 
 //debug variables
-#define DEBUG
+//#define DEBUG
 //#define DEBUG_SHORT_POMOR_TIMES
 
 
