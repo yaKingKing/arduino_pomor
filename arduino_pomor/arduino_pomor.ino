@@ -165,7 +165,9 @@ void initRTC(){
 
 
 void setTimerIn(TimeSpan timerTime){
-  debug("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
+  #ifdef DEBUG
+  Serial.println("  Set timer in "+String(timerTime.minutes())+" min, "+String(timerTime.seconds())+" sec");
+  #endif
   rtc.clearAlarm(1);
   taskStartTime = rtc.now();
   timerTimedOut = false;
@@ -179,7 +181,9 @@ void setTimerIn(TimeSpan timerTime){
 
 
 void debug(char* message){
-  debug(message);
+  #ifdef DEBUG
+  Serial.println(message);
+  #endif
 }
 
 
